@@ -285,16 +285,16 @@ function buildClips(){
   if(!gt||!gt.words||gt.words.length===0)return;
   const dur=gt.words[gt.words.length-1].end;
   const clips=[];
-  for(let s=0;s<dur-10;s+=5){
+  for(let s=0;s<dur-10;s+=10){
     const e=Math.min(s+15,dur);
     const ws=gt.words.filter(w=>w.start>=s&&w.end<=e);
-    if(ws.length>=5){
+    if(ws.length>=3){
       clips.push({start:s,end:e,count:ws.length,
         preview:ws.slice(0,6).map(w=>w.word).join(' ')+'...'});
     }
   }
   clips.sort((a,b)=>a.start-b.start);  // chronological, NOT by density
-  clips.slice(0,6).forEach((c,i)=>{
+  clips.forEach((c,i)=>{
     const b=document.createElement('button');
     b.className='song-btn';
     b.innerHTML='<span class="n">'+(i+1)+'</span><div style="text-align:left"><div style="font-size:13px">'+c.count+' words — '+fmtTime(c.start)+' to '+fmtTime(c.end)+'</div><div style="font-size:11px;color:var(--dim);margin-top:2px">'+c.preview+'</div></div>';

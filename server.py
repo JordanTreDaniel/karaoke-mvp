@@ -163,7 +163,7 @@ def find_best_segments(gt_words, clip_seconds=15):
 
     # Sort chronologically (not by density — density scrambles the song order)
     candidates.sort(key=lambda c: c["start"])
-    return candidates[:8]  # top 8 segments
+    return candidates
 
 
 def grade_recording(recording_path: str, song_name: str, clip_start: float = None, clip_end: float = None):
