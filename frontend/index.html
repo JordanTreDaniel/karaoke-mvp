@@ -224,13 +224,40 @@ function buildLyrics(){
   if(clipStart!==null&&clipEnd!==null){
     words=gt.words.filter(w=>w.start>=clipStart&&w.end<=clipEnd);
   }
+  // Filter out emoji tokens (any char > 0xFFFF)
+  words=words.filter(w=>w.word&&!Array.from(w.word).some(c=>c.codePointAt(0)>0xFFFF));
 
-  const lines=[];let cur=[];
-  words.forEach((w,i)=>{
-    cur.push({...w,i:gt.words.indexOf(w)});
-    if(cur.length>=7){lines.push(cur);cur=[]}
-  });
-  if(cur.length)lines.push(cur);
+  // Use Whisper segments for natural line breaks instead of arbitrary word chunks
+  const lines=[];
+  if(gt.segments&&gt.segments.length>0){
+    // Group words by matching them to segment time ranges
+    let wordIdx=0;
+    gt.segments.forEach(seg=>{
+      const segWords=[];
+      while(wordIdx<words.length&&words[wordIdx].start>=seg.start-0.5&&words[wordIdx].end<=seg.end+0.5){
+        segWords.push({...words[wordIdx],i:gt.words.indexOf(words[wordIdx])});
+        wordIdx++;
+      }
+      if(segWords.length>0)lines.push(segWords);
+    });
+    // Any remaining words not matched to segments
+    if(wordIdx<words.length){
+      const remaining=[];
+      while(wordIdx<words.length){
+        remaining.push({...words[wordIdx],i:gt.words.indexOf(words[wordIdx])});
+        wordIdx++;
+      }
+      if(remaining.length>0)lines.push(remaining);
+    }
+  }else{
+    // Fallback: group by 7-word chunks (if no segments available)
+    let cur=[];
+    words.forEach((w,i)=>{
+      cur.push({...w,i:gt.words.indexOf(w)});
+      if(cur.length>=7){lines.push(cur);cur=[]}
+    });
+    if(cur.length)lines.push(cur);
+  }
 
   lines.forEach(lw=>{
     const el=document.createElement('div');
@@ -266,7 +293,7 @@ function buildClips(){
         preview:ws.slice(0,6).map(w=>w.word).join(' ')+'...'});
     }
   }
-  clips.sort((a,b)=>b.count-a.count);
+  clips.sort((a,b)=>a.start-b.start);  // chronological, NOT by density
   clips.slice(0,6).forEach((c,i)=>{
     const b=document.createElement('button');
     b.className='song-btn';

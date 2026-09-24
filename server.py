@@ -91,11 +91,15 @@ def prepare_song(youtube_url: str, song_name: str, lyrics_text: str = None):
     print(f"Transcribing {audio_path.name} via OpenAI Whisper API...")
     result = openai_transcribe(str(wav_path))
 
-    # 4. Extract word-level timestamps
+    # 4. Extract word-level timestamps (filter emoji and non-word tokens)
     words = []
     for w in result.get("words", []):
+        word_text = w["word"].strip()
+        # Skip emoji, musical symbols, and non-word tokens
+        if not word_text or any(ord(c) > 0xFFFF for c in word_text):
+            continue
         words.append({
-            "word": w["word"].strip(),
+            "word": word_text,
             "start": round(w["start"], 3),
             "end": round(w["end"], 3),
         })
@@ -157,8 +161,8 @@ def find_best_segments(gt_words, clip_seconds=15):
                 "preview": " ".join(w["word"] for w in words_in_clip[:8]) + "...",
             })
 
-    # Sort by word density (most words = best for practice)
-    candidates.sort(key=lambda c: c["word_count"], reverse=True)
+    # Sort chronologically (not by density — density scrambles the song order)
+    candidates.sort(key=lambda c: c["start"])
     return candidates[:8]  # top 8 segments
 
 
