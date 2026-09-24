@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.mp3
+*.wav
+*.webm
+songs/*/ground_truth.json
+songs/*/whisper_raw.json
+frontend/songs
+test_output/
+*.egg-info/
+.env
