@@ -85,6 +85,7 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,sa
 .sec-chorus{background:rgba(255,20,147,.12);color:var(--accent)}
 .sec-intro{background:rgba(255,215,0,.1);color:var(--gold)}
 .sec-outro{background:rgba(85,85,85,.2);color:var(--dim)}
+.sec-bridge{background:rgba(255,152,0,.12);color:#FF9800}
 
 /* Grading spinner */
 .grading-overlay{position:fixed;inset:0;background:rgba(10,10,10,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity .25s}
@@ -174,6 +175,7 @@ let song=null, gt=null, rec=null, chunks=[], recording=false, raf=null;
 let clipStart=null, clipEnd=null;
 let muted=false;
 let grading=false; // guard against double finish()
+let sections=null; // LLM-detected sections
 
 async function init(){
   try{
@@ -200,6 +202,12 @@ async function pickSong(s){
   document.getElementById('hArtist').textContent='J. Cole';
   const r=await fetch('/songs/'+nm+'/ground_truth.json');
   gt=await r.json();
+  // Load LLM-detected sections
+  sections=null;
+  try{
+    const sr=await fetch('/songs/'+nm+'/sections.json');
+    if(sr.ok)sections=await sr.json();
+  }catch(e){}
   document.getElementById('audio').src='/songs/'+nm+'/'+audio_file;
   showPerf();
 }
@@ -336,17 +344,21 @@ function detectSections(){
 function buildSections(){
   const list=document.getElementById('clipList');
   list.innerHTML='';
-  const sections=detectSections();
-  if(!sections.length)return;
 
-  sections.forEach((c,i)=>{
+  // Use LLM-detected sections if available, else fallback to client-side detection
+  let secs=sections;
+  if(!secs||!secs.length)secs=detectSections();
+  if(!secs.length)return;
+
+  secs.forEach((c,i)=>{
     const b=document.createElement('button');
     b.className='song-btn';
     const m1=Math.floor(c.start/60),s1=Math.floor(c.start%60);
     const m2=Math.floor(c.end/60),s2=Math.floor(c.end%60);
     const labelClass='sec-'+c.label;
     const dur=((c.end-c.start)).toFixed(0);
-    b.innerHTML='<span class="n">'+(i+1)+'</span><div style="text-align:left"><div style="font-size:13px"><span class="sec-label '+labelClass+'">'+c.label+'</span>'+m1+':'+(s1<10?'0':'')+s1+' — '+m2+':'+(s2<10?'0':'')+s2+' ('+dur+'s)</div><div style="font-size:11px;color:var(--dim);margin-top:2px">'+c.word_count+' words — '+c.preview+'</div></div>';
+    const wc=c.word_count||'?';
+    b.innerHTML='<span class="n">'+(i+1)+'</span><div style="text-align:left"><div style="font-size:13px"><span class="sec-label '+labelClass+'">'+c.label+'</span>'+m1+':'+(s1<10?'0':'')+s1+' — '+m2+':'+(s2<10?'0':'')+s2+' ('+dur+'s)</div><div style="font-size:11px;color:var(--dim);margin-top:2px">'+wc+' words — '+(c.preview||'')+'</div></div>';
     b.onclick=function(){
       clipStart=c.start;clipEnd=c.end;
       document.getElementById('clipPicker').style.borderColor='var(--accent)';

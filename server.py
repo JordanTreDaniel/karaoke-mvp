@@ -132,6 +132,13 @@ def prepare_song(youtube_url: str, song_name: str, lyrics_text: str = None):
         "youtube_url": youtube_url,
     }
     (song_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
+
+    # 7. Detect sections via LLM
+    sections = detect_sections_llm(words, result.get("text", ""))
+    if sections:
+        (song_dir / "sections.json").write_text(json.dumps(sections, indent=2))
+        print(f"Sections: {len(sections)} sections saved")
+
     print(f"Done: {len(words)} words, {duration:.0f}s")
     return meta
 
@@ -139,6 +146,75 @@ def prepare_song(youtube_url: str, song_name: str, lyrics_text: str = None):
 def normalize(w):
     import re
     return re.sub(r'[^\w]', '', w.lower().strip())
+
+
+def detect_sections_llm(words, full_text):
+    """Use OpenAI to label song sections (intro/verse/chorus/bridge/outro)."""
+    if not OPENAI_KEY or not words:
+        return []
+
+    # Build a compact representation: group words into ~10s chunks with timestamps
+    chunks = []
+    chunk_start = words[0]["start"]
+    chunk_words = []
+    for w in words:
+        chunk_words.append(w["word"])
+        if w["end"] - chunk_start >= 10 or w == words[-1]:
+            chunks.append({
+                "t": f"{chunk_start:.0f}-{w['end']:.0f}",
+                "text": " ".join(chunk_words),
+            })
+            chunk_start = w["end"]
+            chunk_words = []
+
+    chunks_json = json.dumps(chunks, indent=1)
+
+    prompt = f"""Analyze this song and divide it into sections (intro, verse, chorus, bridge, outro).
+
+LYRICS:
+{full_text}
+
+TIMED CHUNKS (start_end: words):
+{chunks_json}
+
+Return a JSON array of section objects. Each section covers one or more consecutive chunks.
+Use ONLY these labels: "intro", "verse", "chorus", "bridge", "outro".
+
+Return ONLY valid JSON array, no markdown:
+[{{"label": "intro", "start": 0.0, "end": 22.0}}, {{"label": "verse", "start": 22.0, "end": 65.0}}, ...]
+
+Rules:
+- intro: short opening before first verse (instrumental, ad-libs, repeated hook)
+- verse: main lyrical content (rap verses, storytelling)
+- chorus: repeated section with the hook/refrain
+- bridge: contrasting section between verses/chorus
+- outro: closing section (repeated hook, fade-out, ad-libs)
+- start/end must be in seconds, matching the chunk timestamps
+- cover the ENTIRE song from first chunk to last"""
+
+    headers = {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.1, "max_tokens": 2000},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            print(f"LLM section detection failed: {resp.status_code}")
+            return []
+        content = resp.json()["choices"][0]["message"]["content"]
+        # Parse JSON (handle markdown code blocks)
+        import re
+        match = re.search(r'```(?:json)?\s*(.*?)```', content, re.DOTALL)
+        text = match.group(1) if match else content.strip()
+        sections = json.loads(text)
+        print(f"LLM detected {len(sections)} sections")
+        return sections
+    except Exception as e:
+        print(f"Section detection error: {e}")
+        return []
 
 
 def find_best_segments(gt_words, clip_seconds=15):
