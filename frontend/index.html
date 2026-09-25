@@ -602,7 +602,7 @@ function showGrade(g){
     <div class="brow"><span>Right word, off timing</span><span class="mid">${g.partial}</span></div>
     <div class="brow"><span>Missed</span><span class="bad">${g.missed}</span></div>
     <div class="brow"><span>Flow recoveries</span><span style="color:var(--cyan)">${g.flow_recoveries}</span></div>
-    <div class="brow"><span>Your words / expected</span><span>${g.user_words} / ${g.total_words}</span></div>
+    <div class="brow"><span>You sang / expected</span><span>${g.total_attempted||g.user_words} / ${g.total_words}</span></div>
     ${transcript}`;
 }
 

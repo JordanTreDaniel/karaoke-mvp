@@ -9,3 +9,5 @@ frontend/songs
 test_output/
 *.egg-info/
 .env
+songs/*/recordings/
+songs/*/grades/

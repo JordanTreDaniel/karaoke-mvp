@@ -259,11 +259,13 @@ def grade_recording(recording_path: str, song_name: str, clip_start: float = Non
             return {"error": "No words in selected clip"}
 
     # Transcribe user recording via OpenAI Whisper API
-    prompt = " ".join(w["word"] for w in gt_words[:80])
+    # Don't inject expected words — biases the transcription
+    prompt = "rap lyrics, music performance"
     print(f"Grading recording via OpenAI Whisper API...")
     result = openai_transcribe(recording_path, prompt)
 
     user_words = []
+    # what does this for loop do? feel sus
     for w in result.get("words", []):
         user_words.append({
             "word": w["word"].strip(),
@@ -298,6 +300,7 @@ def grade_recording(recording_path: str, song_name: str, clip_start: float = Non
     consecutive_misses = 0
     flow_recoveries = 0
 
+    # TODO: should we loop over the user words, time, or gt words when grading?
     for uw in user_words:
         un = normalize(uw["word"])
         best = None
@@ -314,12 +317,13 @@ def grade_recording(recording_path: str, song_name: str, clip_start: float = Non
                     score = 7
                 else:
                     score = 4
+                # what makes a score a "best"?
                 if score > best_score:
                     best_score = score
                     best = g
 
         if best:
-            gt_used.add(best["i"])
+            gt_used.add(best["i"]) # wtf is this?
             consecutive_misses = 0
             results.append({
                 "word": uw["word"],
@@ -334,18 +338,30 @@ def grade_recording(recording_path: str, song_name: str, clip_start: float = Non
                 "word": uw["word"], "expected": None,
                 "score": 0, "diff": None, "status": "miss",
             })
-            if consecutive_misses >= 2:
-                remaining = results[len(results):]
-                if any(r["score"] >= 7 for r in remaining[:3]):
-                    flow_recoveries += 1
+
+    # Flow recovery: detect miss→miss→correct patterns (post-processing)
+    consecutive_misses = 0
+    for r in results:
+        if r["status"] == "miss":
+            consecutive_misses += 1
+        else:
+            if consecutive_misses >= 2 and r["score"] >= 7:
+                flow_recoveries += 1
+            consecutive_misses = 0
 
     correct = sum(1 for r in results if r["status"] == "correct")
     partial = sum(1 for r in results if r["status"] == "late")
     missed = sum(1 for r in results if r["status"] == "miss")
-    total_gt = len(gt_words)
-    accuracy = round((correct + partial * 0.7) / max(total_gt, 1) * 100, 1)
-    timing = round(correct / max(len(results), 1) * 100, 1)
+    total_attempted = len(results)  # words user actually sang
+    total_gt = len(gt_words)       # words expected in clip
+
+    # Accuracy: how many of the user's words were correct (not penalized for skipping)
+    accuracy = round((correct + partial * 0.7) / max(total_attempted, 1) * 100, 1)
+    # Timing: what % of matched words had good timing
+    timing = round(correct / max(correct + partial, 1) * 100, 1)
+    # Score: points earned vs points possible for attempted words
     score = sum(r["score"] for r in results) + flow_recoveries * 2
+    max_possible = total_attempted * 10 + flow_recoveries * 2
 
     if accuracy >= 95: letter = "S"
     elif accuracy >= 90: letter = "A"
@@ -359,10 +375,10 @@ def grade_recording(recording_path: str, song_name: str, clip_start: float = Non
 
     return {
         "grade": letter, "accuracy": accuracy, "timing": timing,
-        "score": score, "max": total_gt * 10,
+        "score": score, "max": max_possible,
         "correct": correct, "partial": partial, "missed": missed,
-        "total_words": total_gt, "user_words": len(user_words),
-        "flow_recoveries": flow_recoveries,
+        "total_words": total_gt, "total_attempted": total_attempted,
+        "user_words": len(user_words), "flow_recoveries": flow_recoveries,
         "details": results,
         "segments": segments,
     }
@@ -410,21 +426,53 @@ class RapCheckHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(400, {"error": "song and audio required"})
                 return
 
-            # Save temp file
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
-                f.write(base64.b64decode(audio_b64))
-                tmp = f.name
+            # Timestamp for this recording
+            ts = time.strftime("%Y%m%d_%H%M%S")
+
+            # Save recording locally and to R2
+            recording_dir = SONGS_DIR / song / "recordings"
+            recording_dir.mkdir(parents=True, exist_ok=True)
+            recording_path = recording_dir / f"{ts}.webm"
+            recording_path.write_bytes(base64.b64decode(audio_b64))
+
+            # Convert to 16kHz mono WAV for Whisper API
+            tmp = str(recording_path)
+            wav = tmp.replace(".webm", ".wav")
             try:
-                # Convert to 16kHz mono WAV for Whisper API
-                wav = tmp.replace(".webm", ".wav")
                 subprocess.run(
                     ["ffmpeg", "-i", tmp, "-ar", "16000", "-ac", "1", wav, "-y"],
                     capture_output=True, timeout=30,
                 )
                 result = grade_recording(wav, song, clip_start, clip_end)
+
+                # Add metadata to result
+                result["song"] = song
+                result["timestamp"] = ts
+                result["clip_start"] = clip_start
+                result["clip_end"] = clip_end
+
+                # Save grade locally
+                grade_dir = SONGS_DIR / song / "grades"
+                grade_dir.mkdir(parents=True, exist_ok=True)
+                grade_path = grade_dir / f"{ts}.json"
+                grade_path.write_text(json.dumps(result, indent=2))
+
+                # Upload to R2 in background (non-blocking)
+                try:
+                    subprocess.Popen([
+                        "rclone", "copy", str(recording_path),
+                        f"r2:karaoke-poc/recordings/{song}/{ts}.webm",
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.Popen([
+                        "rclone", "copy", str(grade_path),
+                        f"r2:karaoke-poc/grades/{song}/{ts}.json",
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass  # R2 upload is non-critical
+
                 self.send_json(200, result)
             finally:
-                for p in [tmp, wav]:
+                for p in [wav]:
                     if os.path.exists(p):
                         os.unlink(p)
 
