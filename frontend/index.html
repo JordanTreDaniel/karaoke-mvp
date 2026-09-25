@@ -79,6 +79,13 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,sa
 
 .hidden{display:none!important}
 
+/* Section picker */
+.sec-label{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 8px;border-radius:4px;margin-right:8px}
+.sec-verse{background:rgba(0,229,255,.12);color:var(--cyan)}
+.sec-chorus{background:rgba(255,20,147,.12);color:var(--accent)}
+.sec-intro{background:rgba(255,215,0,.1);color:var(--gold)}
+.sec-outro{background:rgba(85,85,85,.2);color:var(--dim)}
+
 /* Grading spinner */
 .grading-overlay{position:fixed;inset:0;background:rgba(10,10,10,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity .25s}
 .grading-overlay.on{opacity:1;pointer-events:auto}
@@ -112,7 +119,7 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,sa
 
   <!-- PERFORMANCE -->
   <div id="perf" class="hidden">
-    <!-- CLIP PICKER -->
+    <!-- SECTION PICKER -->
     <div id="clipPicker" style="width:100%;background:var(--surface);border-radius:14px;padding:20px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <span style="font-size:14px;font-weight:600">Pick a section to rap</span>
@@ -202,7 +209,7 @@ function showPerf(){
   document.getElementById('gradeCard').classList.remove('show');
   document.getElementById('perf').classList.remove('hidden');
   clipStart=null;clipEnd=null;
-  buildClips();
+  buildSections();
   buildLyrics();
 }
 
@@ -278,31 +285,97 @@ function buildLyrics(){
   });
 }
 
-function buildClips(){
-  const list=document.getElementById('clipList');
-  list.innerHTML='';
-  // Generate 15-second segments from ground truth
-  if(!gt||!gt.words||gt.words.length===0)return;
-  const dur=gt.words[gt.words.length-1].end;
-  const clips=[];
-  for(let s=0;s<dur-10;s+=10){
-    const e=Math.min(s+15,dur);
-    const ws=gt.words.filter(w=>w.start>=s&&w.end<=e);
-    if(ws.length>=3){
-      clips.push({start:s,end:e,count:ws.length,
-        preview:ws.slice(0,6).map(w=>w.word).join(' ')+'...'});
+function detectSections(){
+  // Detect verse/chorus sections from word timestamps
+  if(!gt||!gt.words||gt.words.length===0)return[];
+  let words=gt.words.filter(w=>!Array.from(w.word).some(c=>c.codePointAt(0)>0xFFFF));
+  const gapThresh=0.6, minWords=25;
+
+  // Find breaks (large gaps between words)
+  const breaks=[0];
+  for(let i=1;i<words.length;i++){
+    if(words[i].start-words[i-1].end>=gapThresh)breaks.push(i);
+  }
+  breaks.push(words.length);
+
+  // Build raw sections
+  const raw=[];
+  for(let i=0;i<breaks.length-1;i++){
+    const sw=words.slice(breaks[i],breaks[i+1]);
+    raw.push({start:sw[0].start,end:sw[sw.length-1].end,
+      text:sw.map(w=>w.word).join(' '),wc:sw.length});
+  }
+
+  // Merge small sections
+  let merged=[raw[0]];
+  for(let i=1;i<raw.length;i++){
+    if(merged[merged.length-1].wc<minWords){
+      const p=merged[merged.length-1];
+      p.end=raw[i].end;p.text+=' '+raw[i].text;p.wc+=raw[i].wc;
+    }else merged.push(raw[i]);
+  }
+  // Final merge pass
+  const final=[merged[0]];
+  for(let i=1;i<merged.length;i++){
+    if(merged[i].wc<minWords&&final.length>0){
+      const p=final[final.length-1];
+      p.end=merged[i].end;p.text+=' '+merged[i].text;p.wc+=merged[i].wc;
+    }else final.push(merged[i]);
+  }
+
+  // Chorus detection: repeated opening phrases
+  for(const s of final){
+    const toks=s.text.toLowerCase().split();
+    s.sig=toks.slice(0,5).join(' ');
+  }
+  const sigCounts={};
+  for(const s of final)sigCounts[s.sig]=(sigCounts[s.sig]||0)+1;
+  const chorusSigs=new Set();
+  for(const[s,c]of Object.entries(sigCounts))if(c>=2)chorusSigs.add(s);
+  // Partial overlap check
+  const sigSets=final.map(s=>new Set(s.sig.split()));
+  for(let i=0;i<sigSets.length;i++){
+    for(let j=i+1;j<sigSets.length;j++){
+      if(!sigSets[i].size||!sigSets[j].size)continue;
+      let overlap=0;
+      for(const w of sigSets[i])if(sigSets[j].has(w))overlap++;
+      if(overlap/Math.min(sigSets[i].size,sigSets[j].size)>=0.6){
+        chorusSigs.add(final[i].sig);chorusSigs.add(final[j].sig);
+      }
     }
   }
-  clips.sort((a,b)=>a.start-b.start);  // chronological, NOT by density
-  clips.forEach((c,i)=>{
+
+  // Label
+  for(let i=0;i<final.length;i++){
+    const s=final[i];
+    if(i===0&&s.wc<15)s.label='intro';
+    else if(i===final.length-1&&s.wc<20)s.label='outro';
+    else if(chorusSigs.has(s.sig))s.label='chorus';
+    else s.label='verse';
+  }
+
+  return final.map(s=>({label:s.label,start:s.start,end:s.end,
+    word_count:s.wc,preview:s.text.slice(0,80)+(s.text.length>80?'...':'')}));
+}
+
+function buildSections(){
+  const list=document.getElementById('clipList');
+  list.innerHTML='';
+  const sections=detectSections();
+  if(!sections.length)return;
+
+  sections.forEach((c,i)=>{
     const b=document.createElement('button');
     b.className='song-btn';
-    b.innerHTML='<span class="n">'+(i+1)+'</span><div style="text-align:left"><div style="font-size:13px">'+c.count+' words — '+fmtTime(c.start)+' to '+fmtTime(c.end)+'</div><div style="font-size:11px;color:var(--dim);margin-top:2px">'+c.preview+'</div></div>';
+    const m1=Math.floor(c.start/60),s1=Math.floor(c.start%60);
+    const m2=Math.floor(c.end/60),s2=Math.floor(c.end%60);
+    const labelClass='sec-'+c.label;
+    const dur=((c.end-c.start)).toFixed(0);
+    b.innerHTML='<span class="n">'+(i+1)+'</span><div style="text-align:left"><div style="font-size:13px"><span class="sec-label '+labelClass+'">'+c.label+'</span>'+m1+':'+(s1<10?'0':'')+s1+' — '+m2+':'+(s2<10?'0':'')+s2+' ('+dur+'s)</div><div style="font-size:11px;color:var(--dim);margin-top:2px">'+c.word_count+' words — '+c.preview+'</div></div>';
     b.onclick=function(){
       clipStart=c.start;clipEnd=c.end;
       document.getElementById('clipPicker').style.borderColor='var(--accent)';
       buildLyrics();
-      // Highlight selected
       list.querySelectorAll('.song-btn').forEach(x=>x.style.borderColor='#2a2a2a');
       b.style.borderColor='var(--accent)';
     };
