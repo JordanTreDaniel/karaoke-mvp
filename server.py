@@ -24,6 +24,7 @@ import requests
 BASE_DIR = Path(__file__).parent
 SONGS_DIR = BASE_DIR / "songs"
 FRONTEND_DIR = BASE_DIR / "frontend"
+ADMIN_DIR = BASE_DIR / "admin" / "dist"
 PORT = 8765
 
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
@@ -484,6 +485,16 @@ class RapCheckHandler(http.server.SimpleHTTPRequestHandler):
                     songs.append(json.loads(meta_path.read_text()))
             self.send_json(200, songs)
 
+        elif self.path.startswith("/api/songs/") and self.path.endswith("/recalc"):
+            song_name = self.path[len("/api/songs/"):-len("/recalc")]
+            song_dir = SONGS_DIR / song_name
+            gt_path = song_dir / "ground_truth.json"
+            if not gt_path.exists():
+                self.send_json(404, {"error": "song not found"})
+                return
+            self.send_json(200, {"status": "not_implemented"})
+            return
+
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -497,13 +508,88 @@ class RapCheckHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, songs)
             return
 
+        if self.path.startswith("/api/songs/"):
+            song_name = self.path[len("/api/songs/"):]
+            song_dir = SONGS_DIR / song_name
+            gt_path = song_dir / "ground_truth.json"
+            if gt_path.exists():
+                gt = json.loads(gt_path.read_text())
+                self.send_json(200, gt)
+            else:
+                self.send_json(404, {"error": "song not found"})
+            return
+
         if self.path.startswith("/songs/"):
             song_path = SONGS_DIR / self.path[7:]
             if song_path.exists() and song_path.is_file():
                 self.send_file(song_path)
                 return
 
+        if self.path.startswith("/admin"):
+            admin_path = self.path[len("/admin"):] or "/"
+            if admin_path == "/":
+                admin_path = "/index.html"
+            file_path = ADMIN_DIR / admin_path.lstrip("/")
+            if file_path.exists() and file_path.is_file():
+                self.send_file(file_path)
+                return
+            index_path = ADMIN_DIR / "index.html"
+            if index_path.exists():
+                self.send_file(index_path)
+                return
+
         super().do_GET()
+
+    def do_PUT(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw = b""
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            raw += chunk
+            remaining -= len(chunk)
+        try:
+            body = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as e:
+            self.send_json(400, {"error": f"Bad JSON: {e}"})
+            return
+
+        if self.path.endswith("/text") and self.path.startswith("/api/songs/"):
+            song_name = self.path[len("/api/songs/"):-len("/text")]
+            song_dir = SONGS_DIR / song_name
+            gt_path = song_dir / "ground_truth.json"
+            if not gt_path.exists():
+                self.send_json(404, {"error": "song not found"})
+                return
+            gt = json.loads(gt_path.read_text())
+            gt["text"] = body.get("text", gt.get("text", ""))
+            gt_path.write_text(json.dumps(gt, indent=2))
+            self.send_json(200, {"status": "updated"})
+            return
+
+        if self.path.endswith("/timing") and self.path.startswith("/api/songs/"):
+            song_name = self.path[len("/api/songs/"):-len("/timing")]
+            song_dir = SONGS_DIR / song_name
+            gt_path = song_dir / "ground_truth.json"
+            if not gt_path.exists():
+                self.send_json(404, {"error": "song not found"})
+                return
+            gt = json.loads(gt_path.read_text())
+            gt["words"] = body.get("words", gt.get("words", []))
+            gt_path.write_text(json.dumps(gt, indent=2))
+            self.send_json(200, {"status": "updated"})
+            return
+
+        self.send_json(404, {"error": "not found"})
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def send_json(self, code, data):
         body = json.dumps(data).encode()
