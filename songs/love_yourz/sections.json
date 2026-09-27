@@ -7,21 +7,26 @@
   {
     "label": "verse",
     "start": 22.0,
-    "end": 130.0
+    "end": 115.0
   },
   {
     "label": "chorus",
-    "start": 130.0,
-    "end": 171.0
+    "start": 115.0,
+    "end": 125.0
   },
   {
-    "label": "bridge",
-    "start": 171.0,
-    "end": 181.0
+    "label": "verse",
+    "start": 125.0,
+    "end": 176.0
+  },
+  {
+    "label": "chorus",
+    "start": 176.0,
+    "end": 186.0
   },
   {
     "label": "outro",
-    "start": 181.0,
+    "start": 186.0,
     "end": 211.0
   }
 ]
