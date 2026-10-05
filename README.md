@@ -1,3 +1,5 @@
+> ⚠️ **DEPRECATED** — superseded by the karaoke implementation in JordanTreDaniel/rapclouds (karaoke tab). Kept for historical purposes only.
+
 # RapCheck — Karaoke MVP
 
 Proof of concept: pick a song section, rap it, get graded word-by-word.
